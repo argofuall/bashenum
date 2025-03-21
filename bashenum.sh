@@ -1,12 +1,17 @@
 #!/bin/bash
 
 # =============================================================================
-# System Security Audit Script
+# System Security Audit Script (Standard User Version)
 # =============================================================================
 # Description: A comprehensive system security auditing script inspired by Lynis.
 # Author: Your Name
 # Date: YYYY-MM-DD
 # =============================================================================
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+# Return the exit status of the last command in the pipe that failed
+set -o pipefail
 
 # ---------------------------
 # Color Definitions
@@ -55,59 +60,17 @@ success() {
 }
 
 # ---------------------------
-# Sudo Privilege Handling
+# Function to Execute Commands
 # ---------------------------
 
-# Prompt the user to decide on using sudo privileges
-use_sudo_prompt() {
-    while true; do
-        read -rp "Do you want to run the script with sudo privileges? (y/n): " yn
-        case $yn in
-            [Yy]* )
-                USE_SUDO=true
-                break
-                ;;
-            [Nn]* )
-                USE_SUDO=false
-                break
-                ;;
-            * )
-                echo "Please answer yes (y) or no (n)."
-                ;;
-        esac
-    done
-}
-
-# Function to execute commands with or without sudo
+# Function to execute commands without sudo
 execute_cmd() {
-    if [ "$USE_SUDO" = true ]; then
-        sudo bash -c "$1"
-    else
-        bash -c "$1"
-    fi
+    "$@"
 }
 
 # ---------------------------
 # Start of Audit
 # ---------------------------
-
-# Initialize USE_SUDO variable
-USE_SUDO=false
-
-# Run the sudo prompt
-use_sudo_prompt
-
-# Verify sudo access if user opted to use sudo
-if [ "$USE_SUDO" = true ]; then
-    if sudo -v; then
-        success "Sudo privileges granted."
-    else
-        error "Sudo privileges required but not granted. Exiting."
-        exit 1
-    fi
-else
-    warn "Running without sudo privileges. Some checks may be limited."
-fi
 
 echo
 
@@ -129,7 +92,7 @@ if [ -f /etc/os-release ]; then
 elif [ -f /etc/lsb-release ]; then
     cat /etc/lsb-release
 else
-    cat /etc/*-release 2>/dev/null
+    cat /etc/*-release 2>/dev/null || warn "No OS release information found."
 fi
 echo
 
@@ -162,11 +125,7 @@ echo
 # Sudo Privileges
 print_subheader "Sudo Privileges"
 if command_exists sudo; then
-    if [ "$USE_SUDO" = true ]; then
-        sudo -l 2>/dev/null || warn "Cannot list sudo privileges."
-    else
-        warn "Sudo privileges were not requested."
-    fi
+    sudo -l 2>/dev/null || warn "Cannot list sudo privileges or user has no sudo access."
 else
     warn "sudo is not installed."
 fi
@@ -178,7 +137,7 @@ print_header "Authentication & Authorization"
 # Password Policies
 print_subheader "Password Policies"
 if [ -f /etc/login.defs ]; then
-    grep -E "^PASS_MAX_DAYS|^PASS_MIN_DAYS|^PASS_MIN_LEN|^PASS_WARN_AGE" /etc/login.defs
+    grep -E "^PASS_MAX_DAYS|^PASS_MIN_DAYS|^PASS_MIN_LEN|^PASS_WARN_AGE" /etc/login.defs || warn "No password policies found."
 else
     warn "/etc/login.defs not found."
 fi
@@ -187,7 +146,7 @@ echo
 # PAM Configuration
 print_subheader "PAM Configuration for Passwords"
 if ls /etc/pam.d/* &>/dev/null; then
-    grep "^password" /etc/pam.d/* | grep -v '^#'
+    grep "^password" /etc/pam.d/* | grep -v '^#' || warn "No password-related PAM configurations found."
 else
     warn "No PAM configuration files found."
 fi
@@ -198,15 +157,15 @@ print_header "Network Configuration"
 
 # Network Interfaces
 print_subheader "Network Interfaces"
-ip a | grep 'inet'
+ip a | grep 'inet' || warn "Could not retrieve network interfaces."
 echo
 
 # Open Ports
 print_subheader "Listening Ports"
 if command_exists ss; then
-    ss -tuln
+    ss -tuln || warn "Failed to retrieve listening ports with ss."
 elif command_exists netstat; then
-    netstat -tuln
+    netstat -tuln || warn "Failed to retrieve listening ports with netstat."
 else
     warn "Neither ss nor netstat is available."
 fi
@@ -215,13 +174,9 @@ echo
 # Firewall Status
 print_subheader "Firewall Status"
 if command_exists ufw; then
-    if [ "$USE_SUDO" = true ]; then
-        sudo ufw status
-    else
-        warn "Firewall status requires sudo privileges."
-    fi
+    ufw status || warn "Failed to retrieve ufw status."
 elif [ -f /etc/iptables/rules.v4 ]; then
-    cat /etc/iptables/rules.v4
+    cat /etc/iptables/rules.v4 || warn "Failed to read iptables rules."
 else
     warn "Firewall status could not be determined."
 fi
@@ -230,7 +185,7 @@ echo
 # DNS Configuration
 print_subheader "DNS Configuration"
 if [ -f /etc/resolv.conf ]; then
-    cat /etc/resolv.conf
+    cat /etc/resolv.conf || warn "Failed to read /etc/resolv.conf."
 else
     warn "/etc/resolv.conf not found."
 fi
@@ -239,9 +194,9 @@ echo
 # Routing Table
 print_subheader "Routing Table"
 if command_exists ip; then
-    execute_cmd "ip route"
+    ip route || warn "Failed to retrieve routing table with ip."
 elif command_exists route; then
-    execute_cmd "route -n"
+    route -n || warn "Failed to retrieve routing table with route."
 else
     warn "Neither ip nor route command is available."
 fi
@@ -255,11 +210,11 @@ print_subheader "Package Manager"
 if command_exists dpkg; then
     echo "Dpkg-based system detected."
     print_subheader "Installed Packages"
-    dpkg -l
+    dpkg -l || warn "Failed to list installed packages with dpkg."
 elif command_exists rpm; then
     echo "RPM-based system detected."
     print_subheader "Installed Packages"
-    rpm -qa
+    rpm -qa || warn "Failed to list installed packages with rpm."
 else
     warn "Unsupported package manager."
 fi
@@ -268,13 +223,9 @@ echo
 # Running Services
 print_subheader "Running Services"
 if command_exists systemctl; then
-    if [ "$USE_SUDO" = true ]; then
-        sudo systemctl list-units --type=service --state=running
-    else
-        systemctl list-units --type=service --state=running
-    fi
+    systemctl list-units --type=service --state=running || warn "Failed to list running services with systemctl."
 elif command_exists service; then
-    service --status-all 2>&1 | grep "+"
+    service --status-all 2>&1 | grep "+" || warn "Failed to list running services with service."
 else
     warn "No service management commands found."
 fi
@@ -287,21 +238,21 @@ print_header "File System & Permissions"
 print_subheader "World-Writable Files"
 WW_FILES_COUNT=$(find / -type f -perm -o+w 2>/dev/null | wc -l)
 echo "Total World-Writable Files: $WW_FILES_COUNT"
-find / -type f -perm -o+w 2>/dev/null | head -n 20
+find / -type f -perm -o+w 2>/dev/null | head -n 20 || warn "Failed to find world-writable files."
 echo
 
 # World-Writable Directories
 print_subheader "World-Writable Directories"
 WW_DIRS_COUNT=$(find / -type d -perm -o+w 2>/dev/null | wc -l)
 echo "Total World-Writable Directories: $WW_DIRS_COUNT"
-find / -type d -perm -o+w 2>/dev/null | head -n 20
+find / -type d -perm -o+w 2>/dev/null | head -n 20 || warn "Failed to find world-writable directories."
 echo
 
 # Sensitive Files Detection
 print_subheader "Sensitive Files Detection"
 SENSITIVE_FILES=$(find /home /root /etc -type f \( -iname "*.env" -o -iname "id_rsa" -o -iname "*.pem" -o -iname "*.key" \) 2>/dev/null)
 if [ -n "$SENSITIVE_FILES" ]; then
-    echo "Sensitive files found:"
+    echo "Sensitive files found (showing up to 20 results):"
     echo "$SENSITIVE_FILES" | head -n 20
     echo "Total Sensitive Files Found: $(echo "$SENSITIVE_FILES" | wc -l)"
 else
@@ -313,11 +264,15 @@ echo
 print_subheader "Home Directory Permissions"
 while IFS=: read -r user pass uid gid gecos home shell; do
     if [ -d "$home" ]; then
-        perms=$(stat -c "%a" "$home" 2>/dev/null)
-        if [ "$perms" -le 755 ]; then
-            echo "User: $user - Home Directory: $home - Permissions: $perms"
+        perms=$(stat -c "%a" "$home" 2>/dev/null || echo "Unknown")
+        if [[ "$perms" =~ ^[0-7][0-9][0-9]$ ]]; then
+            if [ "$perms" -le 755 ]; then
+                echo "User: $user - Home Directory: $home - Permissions: $perms"
+            else
+                warn "User: $user - Home Directory: $home has overly permissive permissions: $perms"
+            fi
         else
-            warn "User: $user - Home Directory: $home has overly permissive permissions: $perms"
+            warn "User: $user - Home Directory: $home has unknown permissions."
         fi
     fi
 done < /etc/passwd
@@ -326,21 +281,32 @@ echo
 # SSH Directory and Files Permissions
 print_subheader "SSH Directory and Files Permissions"
 for user in $(cut -f1 -d: /etc/passwd); do
-    SSH_DIR="/home/$user/.ssh"
+    # Determine home directory
+    USER_HOME=$(eval echo "~$user")
+    SSH_DIR="$USER_HOME/.ssh"
     AUTH_KEYS="$SSH_DIR/authorized_keys"
     if [ -d "$SSH_DIR" ]; then
-        dir_perms=$(stat -c "%a" "$SSH_DIR" 2>/dev/null)
-        auth_perms=$(stat -c "%a" "$AUTH_KEYS" 2>/dev/null)
-        if [ "$dir_perms" -le 750 ]; then
-            echo "User: $user - .ssh Directory Permissions: $dir_perms"
-        else
-            warn "User: $user - .ssh Directory has overly permissive permissions: $dir_perms"
-        fi
-        if [ -f "$AUTH_KEYS" ]; then
-            if [ "$auth_perms" -le 640 ]; then
-                echo "User: $user - authorized_keys Permissions: $auth_perms"
+        dir_perms=$(stat -c "%a" "$SSH_DIR" 2>/dev/null || echo "Unknown")
+        auth_perms=$(stat -c "%a" "$AUTH_KEYS" 2>/dev/null || echo "Unknown")
+        if [[ "$dir_perms" =~ ^[0-7][0-9][0-9]$ ]]; then
+            if [ "$dir_perms" -le 750 ]; then
+                echo "User: $user - .ssh Directory Permissions: $dir_perms"
             else
-                warn "User: $user - authorized_keys has overly permissive permissions: $auth_perms"
+                warn "User: $user - .ssh Directory has overly permissive permissions: $dir_perms"
+            fi
+        else
+            warn "User: $user - .ssh Directory has unknown permissions."
+        fi
+
+        if [ -f "$AUTH_KEYS" ]; then
+            if [[ "$auth_perms" =~ ^[0-7][0-9][0-9]$ ]]; then
+                if [ "$auth_perms" -le 640 ]; then
+                    echo "User: $user - authorized_keys Permissions: $auth_perms"
+                else
+                    warn "User: $user - authorized_keys has overly permissive permissions: $auth_perms"
+                fi
+            else
+                warn "User: $user - authorized_keys has unknown permissions."
             fi
         fi
     fi
@@ -352,11 +318,15 @@ print_subheader "Cron Directory Permissions"
 CRON_DIRS=("/etc/cron.hourly" "/etc/cron.daily" "/etc/cron.weekly" "/etc/cron.monthly" "/etc/crontab" "/var/spool/cron/crontabs")
 for dir in "${CRON_DIRS[@]}"; do
     if [ -e "$dir" ]; then
-        perms=$(stat -c "%a" "$dir" 2>/dev/null)
-        if [ "$perms" -le 700 ]; then
-            echo "$dir Permissions: $perms"
+        perms=$(stat -c "%a" "$dir" 2>/dev/null || echo "Unknown")
+        if [[ "$perms" =~ ^[0-7][0-9][0-9]$ ]]; then
+            if [ "$perms" -le 700 ]; then
+                echo "$dir Permissions: $perms"
+            else
+                warn "$dir has overly permissive permissions: $perms"
+            fi
         else
-            warn "$dir has overly permissive permissions: $perms"
+            warn "$dir has unknown permissions."
         fi
     fi
 done
@@ -368,7 +338,7 @@ print_header "Security Configurations"
 # SSH Configuration
 print_subheader "SSH Configuration"
 if [ -f /etc/ssh/sshd_config ]; then
-    grep -E "PermitRootLogin|PasswordAuthentication|PermitEmptyPasswords|X11Forwarding" /etc/ssh/sshd_config
+    grep -E "PermitRootLogin|PasswordAuthentication|PermitEmptyPasswords|X11Forwarding" /etc/ssh/sshd_config || warn "No relevant SSH configurations found."
 else
     warn "/etc/ssh/sshd_config not found."
 fi
@@ -377,11 +347,7 @@ echo
 # Firewall Rules
 print_subheader "Firewall Rules"
 if command_exists iptables; then
-    if [ "$USE_SUDO" = true ]; then
-        sudo iptables -L -v
-    else
-        warn "Viewing firewall rules requires sudo privileges."
-    fi
+    iptables -L -v || warn "Failed to retrieve iptables rules."
 else
     warn "iptables not installed."
 fi
@@ -390,7 +356,7 @@ echo
 # SELinux Status
 print_subheader "SELinux Status"
 if command_exists getenforce; then
-    getenforce
+    getenforce || warn "Failed to retrieve SELinux status."
 else
     warn "SELinux is not installed."
 fi
@@ -399,7 +365,7 @@ echo
 # AppArmor Status
 print_subheader "AppArmor Status"
 if command_exists apparmor_status; then
-    apparmor_status
+    apparmor_status || warn "Failed to retrieve AppArmor status."
 else
     warn "AppArmor is not installed."
 fi
@@ -411,13 +377,9 @@ print_header "Logging & Auditing"
 # Auditd Status
 print_subheader "Auditd Status"
 if command_exists systemctl; then
-    if [ "$USE_SUDO" = true ]; then
-        sudo systemctl status auditd
-    else
-        warn "Checking auditd status requires sudo privileges."
-    fi
+    systemctl status auditd || warn "Failed to retrieve auditd status with systemctl."
 elif [ -f /etc/init.d/auditd ]; then
-    /etc/init.d/auditd status
+    /etc/init.d/auditd status || warn "Failed to retrieve auditd status with init.d script."
 else
     warn "auditd not installed."
 fi
@@ -426,9 +388,9 @@ echo
 # Log Files Monitoring
 print_subheader "Recent System Logs"
 if [ -f /var/log/syslog ]; then
-    tail -n 20 /var/log/syslog
+    tail -n 20 /var/log/syslog || warn "Failed to read /var/log/syslog."
 elif [ -f /var/log/messages ]; then
-    tail -n 20 /var/log/messages
+    tail -n 20 /var/log/messages || warn "Failed to read /var/log/messages."
 else
     warn "No standard system log files found."
 fi
@@ -441,11 +403,7 @@ print_header "Scheduled Tasks"
 print_subheader "Cron Jobs for All Users"
 for user in $(cut -f1 -d: /etc/passwd); do
     echo "Cron jobs for user: $user"
-    if [ "$USE_SUDO" = true ]; then
-        sudo crontab -u "$user" -l 2>/dev/null || echo "No cron jobs for user: $user"
-    else
-        crontab -u "$user" -l 2>/dev/null || echo "No cron jobs for user: $user"
-    fi
+    crontab -u "$user" -l 2>/dev/null || echo "No cron jobs for user: $user"
     echo
 done
 echo
@@ -453,11 +411,7 @@ echo
 # At Jobs
 print_subheader "At Jobs"
 if command_exists at; then
-    if [ "$USE_SUDO" = true ]; then
-        sudo atq
-    else
-        atq
-    fi
+    atq || warn "Failed to retrieve at jobs or no at jobs are scheduled."
 else
     warn "at command not installed."
 fi
@@ -499,9 +453,22 @@ print_header "Additional Security Checks"
 # Pending Security Updates
 print_subheader "Pending Security Updates"
 if command_exists dpkg; then
-    dpkg -l | grep '^ii  ' | grep -E 'security|updates'
+    execute_cmd apt-get update -qq
+    PENDING_UPDATES=$(apt-get -s upgrade | grep "^Inst" | grep -E 'security|updates') || PENDING_UPDATES=""
+    if [ -n "$PENDING_UPDATES" ]; then
+        echo "Pending Security Updates:"
+        echo "$PENDING_UPDATES"
+    else
+        success "No pending security updates."
+    fi
 elif command_exists rpm; then
-    yum check-update
+    PENDING_UPDATES=$(yum check-update) || PENDING_UPDATES=""
+    if [ -n "$PENDING_UPDATES" ]; then
+        echo "Pending Security Updates:"
+        echo "$PENDING_UPDATES"
+    else
+        success "No pending security updates."
+    fi
 else
     warn "Could not determine package manager for security updates."
 fi
@@ -510,12 +477,14 @@ echo
 # Services Listening on Non-Standard Ports
 print_subheader "Services Listening on Non-Standard Ports"
 STANDARD_PORTS=(22 80 443)
+
 if command_exists ss; then
     LISTEN_PORTS=$(ss -tuln | awk '{print $5}' | grep -oP '(?<=:)\d+')
 elif command_exists netstat; then
     LISTEN_PORTS=$(netstat -tuln | awk '{print $4}' | grep -oP '(?<=:)\d+')
 else
     warn "Neither ss nor netstat is available to check listening ports."
+    LISTEN_PORTS=""
 fi
 
 if [ -n "$LISTEN_PORTS" ]; then
